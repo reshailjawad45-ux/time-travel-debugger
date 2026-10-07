@@ -246,10 +246,59 @@ string firstWord(const string &line)
 }
 string secondWord(const string &line)
 {
-    
+    string word2="";
+    int st_idx=0;
+    //skipin irst word
+    while(st_idx<line.length() &&line[st_idx] !=' ' && line[st_idx]!='\t'){
+        st_idx++;
+    }
+    //skiping spaces afteer first word if there are
+    while(st_idx <line.length() && (line[st_idx]==' ' || line[st_idx]=='\t')){
+        st_idx++;
+    }
+
+    //readin sec word
+
+    for(int i=st_idx;i<line.length();i++){
+        if(line[i]==' ' || line[i]=='\t'){
+        break;
+        }
+        word2+=line[i];
+    }
+
+    return word2;
 }
 bool validateProgram(const char *sourcePath)
 {
+    ifstream fin(sourcePath);
+    if(!fin){
+        cout <<"File not found\n";
+        return false;
+    }
+    Stack<string> check;
+
+    string line;
+    while(readSourceLine(fin,line)){
+        string first_word=firstWord(line);
+        if(first_word=="func"){
+            if(!check.isEmpty() && check.peek()=="func"){
+                cout <<"Error: Nested Function detected.\n";
+                return false;
+            }
+            check.push(first_word);
+        }else if(first_word=="func_end"){
+            if(check.isEmpty()){
+                cout <<"Error: func end without func.\n";
+                return false;
+            }
+            check.pop();
+        }
+    }
+    if(!check.isEmpty()){
+            cout <<"Error: Func not closed.";
+            return false;
+    }
+    return true;
     // for each func defined there should be exactly one func_end and no nested funcs allowed - 
 }
 
