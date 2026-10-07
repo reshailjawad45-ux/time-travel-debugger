@@ -444,6 +444,93 @@ struct Token
 };
 int32_t tokenizeLine(const string &line, Token tokens[], int32_t maxTokens)
 {
+    int32_t token_ct=0;
+
+    string word1="";
+    string word2="";
+
+    string parameters[MAX_VARS_PER_FRAME];
+    int para_ct=0;
+    int start=0;
+
+    //reading first word
+    for(int i=start;i<line.length();i++){
+        if(line[i]==' ' || line[i]=='\t'){
+        break;
+        }
+        word1+=line[i];
+        start++;
+   }
+
+   if(word1==""){
+    return token_ct;
+   }
+
+   tokens[token_ct].type= KEYWORD; //add keyword
+   tokens[token_ct].text=word1;
+   token_ct++;
+
+    //remove spaces
+   while(start<line.length() && (line[start]==' ' || line[start]=='\t')){
+    start++;
+   }
+
+   //read second word
+   for(int i=start;i<line.length();i++){
+        if(line[i]==' ' || line[i]=='\t'){
+        break;
+        }
+        word2+=line[i];
+        start++;
+   }
+
+   if(word2==""){
+    return token_ct;
+   }
+
+   tokens[token_ct].type=IDENTIFIER;     //add identifier
+   tokens[token_ct].text=word2;
+   token_ct++;
+
+   //reove spaces
+   while(start<line.length() && (line[start]==' ' || line[start]=='\t')){
+    start++;
+   }
+    
+   //loop to read al parameter and add in param
+   while(start<line.length()){
+
+    string word="";
+    for(int i=start;i<line.length();i++){
+        
+        if(line[i]==' ' || line[i]=='\t'){
+            break;
+        }
+        word+=line[i];
+        start++;
+    }
+    parameters[para_ct]=word;
+    para_ct++;
+    while(start<line.length() && (line[start]==' ' || line[start]=='\t')){
+    start++;
+    }
+   }
+   if(para_ct==0){
+    return token_ct;
+   }
+
+   //add the parameters in tokens
+   for(int i=0;i<para_ct;i++){
+    if(token_ct>=maxTokens){
+        return token_ct;
+    }
+    tokens[token_ct].type=PARAM;
+    tokens[token_ct].text=parameters[i];
+    token_ct++;
+   }
+
+   return token_ct;
+
     // first word is always a instruction keyword
     // instruction set = [func, func_end, call, set, add, sub, mul and div]
     // next word is identifier like name of a function, variable name

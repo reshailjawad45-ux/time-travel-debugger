@@ -37,5 +37,6 @@
 
 ### what i implemented
  - in read sourceline i fix the pos of return false since it was inside the loop change it to outsize the loop
-
--
+ - complete pass 0X1
+ - start pass 0X2
+ - complete tokenizeline function
