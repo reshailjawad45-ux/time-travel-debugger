@@ -40,3 +40,5 @@
  - complete pass 0X1
  - start pass 0X2
  - complete tokenizeline function
+ - build snapshot done
+ 

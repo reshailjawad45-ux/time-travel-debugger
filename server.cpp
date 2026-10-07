@@ -538,6 +538,12 @@ int32_t tokenizeLine(const string &line, Token tokens[], int32_t maxTokens)
 }
 Snapshot *buildSnapshot(Stack<Frame> &callStack)
 {
+    Snapshot * snap=new Snapshot;
+    snap.stackDepth=callStack.depth();
+
+    callStack.snapshot_into(snap->callStack,MAX_STACK_DEPTH);
+
+    return snap;
     // build the snapshot based on the callStack given
 }
 void executeProgram(const char *resolveBinPath, int64_t mainOffset, Timeline &timeline)
