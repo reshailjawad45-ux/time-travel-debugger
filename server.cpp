@@ -225,9 +225,9 @@ bool readSourceLine(ifstream &in, string &out)
             out =newline;
             return true;
         }
-
-        return false;
     }
+
+    return false;
     // reads the next nonblank line
 }
 string firstWord(const string &line)
@@ -305,11 +305,34 @@ bool validateProgram(const char *sourcePath)
 // PASS 0x1: RESOLVE() -> resolve.bin
 int64_t writeResolveRecord(FILE *f, int64_t offsetField, const string &text)
 {
+    int64_t record_pos=ftell(f);
+
+    int32_t str_size=text.length();
+
+    fwrite(&offsetField,sizeof(int64_t),1,f);
+    fwrite(&str_size,sizeof(int32_t),1,f);
+    fwrite(text.c_str(),1,str_size,f);
+
+    return record_pos;
+
     // writes one [offset(8B)][size(4B)][string] record at the current file position
     // returns this record's own starting byte position
 }
 int64_t readResolveRecord(FILE *f, string &outText)
 {
+    int64_t offset;
+    int32_t str_size;
+
+    if(fread(&offset,sizeof(int64_t),1,f)!=1){
+        return -1;
+    }
+    if(fread(&str_size,sizeof(int32_t),1,f)!=1){
+        return -1;
+    }
+    outText.resize(str_size);
+    fread(&outText[0],sizeof(char),str_size,f);
+
+    return offset;
     // reads one record at the current position and advances past it, returns the offset field - the raw line text comes back untouched in outText.
 }
 int64_t resolveProgram(const char *sourcePath, const char *resolveBinPath)
@@ -318,6 +341,85 @@ int64_t resolveProgram(const char *sourcePath, const char *resolveBinPath)
     int32_t funcCount = 0;
     PendingPatch patches[MAX_PATCHES];
     int32_t patchCount = 0;
+
+    ifstream fin(sourcePath);
+    FILE * fout=fopen(resolveBinPath,"wb");
+
+    if(!fin){
+        cout <<"Sorce file not opening\n";
+        return -1;
+    }
+
+    if(!fout){
+        cout <<"File not created";
+        return -1;
+    }
+    string line;
+
+    int64_t offset=0;
+    int64_t mainOffset=-1;
+    while(readSourceLine(fin,line)){
+        int64_t record_pos=writeResolveRecord(fout,offset,line);
+
+        string first_word=firstWord(line);
+        if(first_word=="func"){
+            if(MAX_FUNCS<funcCount){
+                cout <<"Number of function exceeded";
+                return-1;
+            }
+            string secondword=secondWord(line);
+
+            funcArray[funcCount].funcName=secondword;
+            funcArray[funcCount].byteOffsetInResolveBin=offset;
+            funcCount++;
+
+            if(secondword=="main"){
+                mainOffset=offset;
+            }
+        }
+        else if(first_word=="call"){
+            if(MAX_PATCHES<patchCount){
+                cout <<"Number of pathches exceeded";
+                return-1;
+            }
+            string secondword=secondWord(line);
+
+            patches[patchCount].targetFuncName=secondword;
+            patches[patchCount].byteOffsetOfOffsetField=record_pos;
+            patchCount++;
+        }
+
+        offset=offset+8+4+line.length();
+    }
+
+    
+    for(int i=0;i<patchCount;i++){
+        int64_t tar_offset=-1;
+        for(int j=0;j<funcCount;j++){
+            if(patches[i].targetFuncName==funcArray[j].funcName){
+                tar_offset=funcArray[j].byteOffsetInResolveBin;
+                break;
+            }
+        }
+        if(tar_offset==-1){
+            cout <<"Function not found\n";
+            return -1;
+        }
+        fseek(fout,patches[i].byteOffsetOfOffsetField,SEEK_SET);
+        fwrite(&tar_offset,sizeof(int64_t),1,fout);
+    }
+    if(mainOffset==-1){
+        cout <<"no main function";
+        return -1;
+    }
+
+
+
+    fin.close();
+    fclose(fout);
+
+    return mainOffset;
+
     // Every source line becomes one record holding the raw line, as-is.
     // resolve() only PEEKS at the leading word(s) -- enough to spot FUNC
     // (remember its position) and CALL (remember which function it needs
@@ -381,6 +483,11 @@ int32_t main()
     }
 
     int64_t mainOffset = resolveProgram("source.bin", "resolve.bin");
+
+    if(mainOffset ==-1){
+        return 1;
+    }
+    
 
     Timeline timeline;
     executeProgram("resolve.bin", mainOffset, timeline);

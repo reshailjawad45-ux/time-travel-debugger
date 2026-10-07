@@ -32,3 +32,10 @@
 
 ### where i will start again today
 - hoping to complete stage1 and stage 2
+
+## Date 7th october 2026
+
+### what i implemented
+ - in read sourceline i fix the pos of return false since it was inside the loop change it to outsize the loop
+
+-
