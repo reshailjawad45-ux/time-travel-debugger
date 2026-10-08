@@ -546,8 +546,135 @@ Snapshot *buildSnapshot(Stack<Frame> &callStack)
     return snap;
     // build the snapshot based on the callStack given
 }
+
+int32_t value_or_variable(Frame& curr,string & param){
+    bool check_num=true;
+
+    int st=0;
+    if(param.length>0 && param[0]=='-'){  //checking if the number if the text is -neg
+        st=1;
+    }
+
+    for(int i=st;i<param.length();i++){
+        if(param[i]< '0' || param[i]> '9'){
+            check_num=false;
+            break;
+        }
+    }
+
+    if(check_num){
+        return stoi(param);    //return value
+    }
+
+    for(int i=0;i<curr.localCount;i++){
+        if(curr.locals[i].name==param){
+            return  curr.locals[i].value;
+        }
+    }
+
+    return 0   
+}
 void executeProgram(const char *resolveBinPath, int64_t mainOffset, Timeline &timeline)
 {
+    FILE * fin=fopen(resolveBinPath,"rb");
+    if(!fin){
+        cout <<"File not found\n";
+        return;
+    }
+    Stack<Frame> callStack;  //initailix=ze call satck
+
+    fseek(fin,mainOffset,SEEK_SET);
+
+    Frame main_;       //crreate main frame
+    main_.func_name="main";
+    main_.argc=0;
+    main_.localCount=0;
+    main_.returnLine=-1;
+
+    callStack.push(main_);  //push the frame into stack callStack
+
+    string curr_line;
+    int64_t offset;
+    while(true){
+
+        offset=readResolveRecord(fin,curr_line);
+
+        if(offset==-1){
+            return;
+        }
+        Token tokens[MAX_TOKENS];
+        int token_ct=tokenizeLine(curr_line,tokens,MAX_TOKENS);
+
+        if(tokens[0].text="func"){
+
+        }
+        else if(tokens[0].text="set"){
+            string var=tokens[1].text;
+            int32_t val=stoi(tokens[2].text);
+            Frame &curr=callStack.peek();
+
+            bool flag=false;
+            for(int i=0;i<curr.localCount;i++){
+                if(curr.locals[i].name==var){
+                    curlocals[i].value=val;
+                    flag=true;
+                    break;
+                }
+            }
+            if(!flag){
+                curr.locals[curr.localCount].name=var;
+                curr.locals[curr.localCount].value=val;
+                curr.localCount++;
+            }
+        }
+        else if(tokens[0].text=="add"){
+            Frame &curr=callStack.peek();
+            string var=tokens[1].text;
+            int32_t val= value_or_variable(curr,tokens[2].text);
+            for(int i=0;i<curr.localCount;i++){
+                if(curr.locals[i].name==var){
+                    curr.locals[i].value=curr.locals[i].value + val;
+                    break;
+                }
+            }
+        }
+        else if(tokens[0].text=="sub"){
+            Frame &curr=callStack.peek();
+            string var=tokens[1].text;
+            int32_t val= value_or_variable(curr,tokens[2].text);
+            for(int i=0;i<curr.localCount;i++){
+                if(curr.locals[i].name==var){
+                    curr.locals[i].value=curr.locals[i].value - val;
+                    break;
+                }
+            }
+        }
+        else if(tokens[0].text=="mul"){
+            Frame &curr=callStack.peek();
+            string var=tokens[1].text;
+            int32_t val= value_or_variable(curr,tokens[2].text);
+            for(int i=0;i<curr.localCount;i++){
+                if(curr.locals[i].name==var){
+                    curr.locals[i].value=curr.locals[i].value * val;
+                    break;
+                }
+            }
+        }else if(tokens[0].text=="div"){
+            Frame &curr=callStack.peek();
+            string var=tokens[1].text;
+            int32_t val= value_or_variable(curr,tokens[2].text);
+
+            for(int i=0;i<curr.localCount;i++){
+                if(curr.locals[i].name==var){
+                    curr.locals[i].value=curr.locals[i].value / val;
+                    break;
+                }
+            }
+        }
+
+    }
+
+
     // initialize the call stack
     // make the main frame
     // push main frame on the call stack
