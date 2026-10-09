@@ -41,4 +41,27 @@
  - start pass 0X2
  - complete tokenizeline function
  - build snapshot done
- 
+
+### where i will start nexttime
+- comeplete pass0x2
+
+
+## Date 8th october 2026
+
+### what i implemented
+ - made helper function for excecute programee
+ - try to complete pass0x2
+
+### where i will start nextime
+- pass0x2 
+
+
+## Date 9th october 2026
+
+### what i implemented
+ - complete passX02
+
+
+
+
+

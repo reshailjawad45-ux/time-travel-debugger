@@ -16,6 +16,7 @@
 #include <sys/socket.h>
 #include <cstdint>
 #include <cstdio>
+#include<stdexcept>
 using namespace std;
 
 // ---- Constants ----
@@ -363,8 +364,9 @@ int64_t resolveProgram(const char *sourcePath, const char *resolveBinPath)
 
         string first_word=firstWord(line);
         if(first_word=="func"){
-            if(MAX_FUNCS<funcCount){
+            if(funcCount>=MAX_FUNCS){
                 cout <<"Number of function exceeded";
+                fclose(fout);
                 return-1;
             }
             string secondword=secondWord(line);
@@ -378,8 +380,9 @@ int64_t resolveProgram(const char *sourcePath, const char *resolveBinPath)
             }
         }
         else if(first_word=="call"){
-            if(MAX_PATCHES<patchCount){
+            if(patchCount>=MAX_PATCHES){
                 cout <<"Number of pathches exceeded";
+                fclose(fout);
                 return-1;
             }
             string secondword=secondWord(line);
@@ -403,6 +406,7 @@ int64_t resolveProgram(const char *sourcePath, const char *resolveBinPath)
         }
         if(tar_offset==-1){
             cout <<"Function not found\n";
+            fclose(fout);
             return -1;
         }
         fseek(fout,patches[i].byteOffsetOfOffsetField,SEEK_SET);
@@ -410,6 +414,7 @@ int64_t resolveProgram(const char *sourcePath, const char *resolveBinPath)
     }
     if(mainOffset==-1){
         cout <<"no main function";
+        fclose(fout);
         return -1;
     }
 
@@ -499,6 +504,9 @@ int32_t tokenizeLine(const string &line, Token tokens[], int32_t maxTokens)
     
    //loop to read al parameter and add in param
    while(start<line.length()){
+    if(para_ct >=MAX_VARS_PER_FRAME){
+        break;
+    }
 
     string word="";
     for(int i=start;i<line.length();i++){
@@ -539,7 +547,7 @@ int32_t tokenizeLine(const string &line, Token tokens[], int32_t maxTokens)
 Snapshot *buildSnapshot(Stack<Frame> &callStack)
 {
     Snapshot * snap=new Snapshot;
-    snap.stackDepth=callStack.depth();
+    snap->stackDepth=callStack.depth();
 
     callStack.snapshot_into(snap->callStack,MAX_STACK_DEPTH);
 
@@ -547,11 +555,43 @@ Snapshot *buildSnapshot(Stack<Frame> &callStack)
     // build the snapshot based on the callStack given
 }
 
+Variable *search_variable(Frame &curr,string var_name){
+    for(int i=0;i<curr.argc;i++){
+        if(curr.argv[i].name ==var_name){           //check for variable in local and arv of frame
+            return &curr.argv[i];
+
+        }
+    }
+
+    for(int i=0;i<curr.localCount;i++){
+        if(curr.locals[i].name==var_name){
+            return &curr.locals[i];
+        }
+    }
+    return nullptr;
+}
+
+
+Variable *find_or_create_var(Frame & f,string var_name){
+    Variable* var=search_variable(f,var_name);
+    if(var !=nullptr){
+        return var;
+    }                                //check the varin local and srv aif not found creatte neew local
+
+    if(f.localCount>=MAX_VARS_PER_FRAME){
+        return nullptr;
+    }
+
+    f.locals[f.localCount].name=var_name;
+    f.locals[f.localCount].value=0;
+    f.localCount++;
+    return &f.locals[f.localCount -1];
+}
 int32_t value_or_variable(Frame& curr,string & param){
     bool check_num=true;
 
     int st=0;
-    if(param.length>0 && param[0]=='-'){  //checking if the number if the text is -neg
+    if(param.length()>0 && param[0]=='-'){  //checking if the number if the text is -neg
         st=1;
     }
 
@@ -562,17 +602,16 @@ int32_t value_or_variable(Frame& curr,string & param){
         }
     }
 
-    if(check_num){
+    if(check_num && param.length() > st){
         return stoi(param);    //return value
     }
 
-    for(int i=0;i<curr.localCount;i++){
-        if(curr.locals[i].name==param){
-            return  curr.locals[i].value;
-        }
+    Variable* var=search_variable(curr,param);
+    if(var!=nullptr){
+        return var->value;
     }
 
-    return 0   
+    return 0;
 }
 void executeProgram(const char *resolveBinPath, int64_t mainOffset, Timeline &timeline)
 {
@@ -584,6 +623,7 @@ void executeProgram(const char *resolveBinPath, int64_t mainOffset, Timeline &ti
     Stack<Frame> callStack;  //initailix=ze call satck
 
     fseek(fin,mainOffset,SEEK_SET);
+    string call_arguments[MAX_STACK_DEPTH+1][MAX_VARS_PER_FRAME];
 
     Frame main_;       //crreate main frame
     main_.func_name="main";
@@ -600,77 +640,154 @@ void executeProgram(const char *resolveBinPath, int64_t mainOffset, Timeline &ti
         offset=readResolveRecord(fin,curr_line);
 
         if(offset==-1){
+            fclose(fin);
             return;
         }
         Token tokens[MAX_TOKENS];
         int token_ct=tokenizeLine(curr_line,tokens,MAX_TOKENS);
 
-        if(tokens[0].text="func"){
+        if(tokens[0].text=="func"){
+            continue;
 
         }
-        else if(tokens[0].text="set"){
+        else if(tokens[0].text=="set"){
             string var=tokens[1].text;
-            int32_t val=stoi(tokens[2].text);
             Frame &curr=callStack.peek();
+            int32_t val=value_or_variable(curr,tokens[2].text);
 
-            bool flag=false;
-            for(int i=0;i<curr.localCount;i++){
-                if(curr.locals[i].name==var){
-                    curlocals[i].value=val;
-                    flag=true;
-                    break;
-                }
+            Variable * new_var=find_or_create_var(curr,var);
+            if(new_var==nullptr){
+                cout <<"Number of variable Exceeded!.\n";
+                fclose(fin);
+                return;
             }
-            if(!flag){
-                curr.locals[curr.localCount].name=var;
-                curr.locals[curr.localCount].value=val;
-                curr.localCount++;
-            }
+
+            new_var->value=val;
         }
         else if(tokens[0].text=="add"){
             Frame &curr=callStack.peek();
             string var=tokens[1].text;
             int32_t val= value_or_variable(curr,tokens[2].text);
-            for(int i=0;i<curr.localCount;i++){
-                if(curr.locals[i].name==var){
-                    curr.locals[i].value=curr.locals[i].value + val;
-                    break;
-                }
+            Variable* v=search_variable(curr,var);
+            if(v==nullptr){
+                cout<<"Varible not defined.\n";
+                fclose(fin);
+                return;
             }
+            v->value=v->value+ val;
         }
         else if(tokens[0].text=="sub"){
             Frame &curr=callStack.peek();
             string var=tokens[1].text;
             int32_t val= value_or_variable(curr,tokens[2].text);
-            for(int i=0;i<curr.localCount;i++){
-                if(curr.locals[i].name==var){
-                    curr.locals[i].value=curr.locals[i].value - val;
-                    break;
-                }
+            Variable* v=search_variable(curr,var);
+            if(v==nullptr){
+                cout<<"Varible not defined.\n";
+                fclose(fin);
+                return;
             }
+            v->value=v->value - val;
         }
         else if(tokens[0].text=="mul"){
             Frame &curr=callStack.peek();
             string var=tokens[1].text;
             int32_t val= value_or_variable(curr,tokens[2].text);
-            for(int i=0;i<curr.localCount;i++){
-                if(curr.locals[i].name==var){
-                    curr.locals[i].value=curr.locals[i].value * val;
-                    break;
-                }
+            Variable* v=search_variable(curr,var);
+            if(v==nullptr){
+                cout<<"Varible not defined.\n";
+                fclose(fin);
+                return;
             }
+            v->value=v->value * val;
         }else if(tokens[0].text=="div"){
             Frame &curr=callStack.peek();
             string var=tokens[1].text;
             int32_t val= value_or_variable(curr,tokens[2].text);
+            Variable* v=search_variable(curr,var);
+            if(val==0){
+                cout <<"division by zero not possible!!.\n";
+                fclose(fin);
+                return;
+            }
+            if(v==nullptr){
+                cout<<"Varible not defined.\n";
+                fclose(fin);
+                return;
+            }
+            v->value=v->value / val;
+        }
+        else if(tokens[0].text=="call"){
+            if(callStack.depth() >=MAX_STACK_DEPTH){
+                cout <<"Call stack function exceeded.!!\n";
+                fclose(fin);
+                return;
+            }
+            Frame & caller_frame=callStack.peek();
 
-            for(int i=0;i<curr.localCount;i++){
-                if(curr.locals[i].name==var){
-                    curr.locals[i].value=curr.locals[i].value / val;
-                    break;
+            int32_t return_line=ftell(fin);
+
+            fseek(fin,offset,SEEK_SET);
+
+            string new_func;
+            readResolveRecord(fin,new_func);
+            Token ftokens[MAX_TOKENS];
+            int fct=tokenizeLine(new_func,ftokens,MAX_TOKENS);
+
+            int param_ct=fct-2;
+            int arg_ct=token_ct-2;
+
+            if(param_ct!=arg_ct){
+                cout <<"Wrong number of Parameter passed.\n";
+                fclose(fin);
+                return;
+            }
+
+            Frame called_func;
+            called_func.func_name=ftokens[1].text;
+            called_func.argc=param_ct;
+            called_func.returnLine=return_line;
+            called_func.localCount=0;
+
+            int dep=callStack.depth() +1;
+
+            for(int i=0;i<param_ct;i++){
+                called_func.argv[i].name=ftokens[2 +i].text;
+                called_func.argv[i].value=value_or_variable(caller_frame,tokens[i+2].text);
+                call_arguments[dep][i]=tokens[2+i].text;
+            }
+            callStack.push(called_func);
+
+        }
+        else if(tokens[0].text=="func_end"){
+            int new_depth=callStack.depth();
+
+            Frame func_comp=callStack.pop();
+
+            if(callStack.isEmpty()){
+                Snapshot * s=buildSnapshot(callStack);
+                timeline.record(s);
+                fclose(fin);
+                return;
+            }
+
+            Frame & curr=callStack.peek();
+            for(int i=0;i<func_comp.argc;i++){
+                Variable * var=search_variable(curr,call_arguments[new_depth][i]);
+                if(var!=nullptr){
+                    var->value=func_comp.argv[i].value;
+
                 }
             }
+            fseek(fin,func_comp.returnLine,SEEK_SET);
         }
+        else{
+
+            cout <<"Insttruction incorrect\n";
+            fclose(fin);
+            return;
+        }
+
+        timeline.record(buildSnapshot(callStack));
 
     }
 
