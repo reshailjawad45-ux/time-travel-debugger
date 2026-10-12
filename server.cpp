@@ -190,6 +190,8 @@ void writeHeader(FILE *f, const TTDBHeader &h)
 {
     fwrite(h.magic, 1, 4, f);
     fwrite(&h.version, sizeof(int32_t), 1, f);
+    fwrite(&h.stepCount,sizeof(int32_t),1,f);
+    fwrite(&h.indexOffset,sizeof(int64_t),1,f);
 
     // placeholder for other two data members
 }
@@ -646,6 +648,16 @@ void executeProgram(const char *resolveBinPath, int64_t mainOffset, Timeline &ti
         Token tokens[MAX_TOKENS];
         int token_ct=tokenizeLine(curr_line,tokens,MAX_TOKENS);
 
+        if(token_ct==0){
+            continue;
+        }
+
+        if((tokens[0].text=="set"||tokens[0].text=="add"||tokens[0].text=="sub"||tokens[0].text=="mul"||tokens[0].text=="div") && token_ct <3){
+            cout <<"Missin value.\n";
+            fclose(fin);
+            return;
+        }
+
         if(tokens[0].text=="func"){
             continue;
 
@@ -800,9 +812,92 @@ void executeProgram(const char *resolveBinPath, int64_t mainOffset, Timeline &ti
     // execute line by line, and according to the keyword perform action
 }
 
+void writeStringinBinary(FILE* f,const string &str){
+    int32_t len=str.length();
+    fwrite(&len,sizeof(int32_t),1,f);
+    fwrite(str.c_str(),1,len,f);
+}
+
+void write_var_in_bin(FILE *f,Variable var){
+    writeStringinBinary(f,var.name);
+    fwrite(&var.value,sizeof(int32_t),1,f);
+}
+
+
+void writeSnapshot_in_bin(FILE * f,const Snapshot & snap){
+    fwrite(&snap.stackDepth,sizeof(int32_t),1,f);
+    for(int i=0;i<snap.stackDepth;i++){
+
+        const Frame& curr=snap.callStack[i];
+        writeStringinBinary(f,curr.func_name);
+        fwrite(&curr.argc,sizeof(int32_t),1,f);
+        for(int j=0;j<curr.argc;j++){
+            write_var_in_bin(f,curr.argv[j]);
+
+        }
+
+        fwrite(&curr.returnLine,sizeof(int32_t),1,f);
+
+        fwrite(&curr.localCount,sizeof(int32_t),1,f);
+        for(int j=0;j<curr.localCount;j++){
+            write_var_in_bin(f,curr.locals[j]);
+        }
+    }
+}
 // PASS 0x3: SERIALIZE TIMELINE
 void writeTdbg(Timeline &timeline, const char *tdbgPath)
 {
+    FILE *fout=fopen(tdbgPath,"wb");
+
+    if(!fout){
+        cout <<"File not created.\n";
+        return;
+    }
+
+    TTDBHeader head;
+    head.magic[0]='T';
+    head.magic[1]='T';
+    head.magic[2]='D';
+    head.magic[3]='B';
+
+    head.version=1;
+    head.stepCount=timeline.getStepCount();
+    head.indexOffset=0;
+
+    writeHeader(fout,head);
+
+    int32_t step_ct=timeline.getStepCount();
+
+    int64_t *index;
+    if(step_ct >0){
+        index=new int64_t[step_ct];
+    }else{
+        index=new int64_t[1];
+
+    }
+
+    int32_t idx=0;
+
+    TimelineNode *n=timeline.begin();
+    while(n!=nullptr){
+        index[idx]=ftell(fout);
+        idx++;
+
+        writeSnapshot_in_bin(fout,*(n->data));
+
+        n=n->next;
+
+    }
+    head.indexOffset=ftell(fout);
+    fwrite(index,sizeof(int64_t),step_ct,fout);
+
+    fseek(fout,0,SEEK_SET);
+    writeHeader(fout,head);
+
+    delete[] index;
+
+    fclose(fout);
+
     // placeholder for header
     // index array of the size of stepcount from the timeline
     // placing each snapshot in the file while maintaining the index(starting point of each nth snapshot)

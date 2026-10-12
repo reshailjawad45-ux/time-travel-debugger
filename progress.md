@@ -62,6 +62,16 @@
  - complete passX02
 
 
+## Date 12th october 2026
+
+### what i implemented
+ - start passX03
+ - write 3-4 helper functions
+ - complete writr Tdbg function
+ - stage 4 compete
+ - phase 01 of Project complete
+
+
 
 
 
