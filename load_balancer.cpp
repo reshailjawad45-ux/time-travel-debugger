@@ -68,26 +68,61 @@ public:
     // Implement these functions:
     Queue()
     {
+        count=0;
+        front=rear=nullptr;
 
     }
     ~Queue()
     {
+        Node * temp=front;
+        while(temp!=nullptr){
+            front=front->next;
+            delete temp;
+            temp=front;
+
+        }
 
     }
     void enqueue(const T &val)
     {
+        Node * n=new Node{val,nullptr};
+        if(front==nullptr){
+            front=rear=n;
+            count++;
+            return;
+        }
+        rear->next=n;
+        rear=n;
+        count++;
 
     }
     T dequeue()
     {
+        if(isEmpty()){
+            throw underflow_error("Queue is Empty!\n");
+        }
+        int val=front->data;
+        if(front==rear){
+            delete front;
+            count--;
+            rear=nullptr;
+            return val;
+        }
+        Node * temp=front;
+        front=front->next;
+        delete temp;
+        count--;
+        return val;
 
     }
     bool isEmpty()
     {
+        return count==0;
         
     }
     int size()
     {
+        return count;
 
     }
 };

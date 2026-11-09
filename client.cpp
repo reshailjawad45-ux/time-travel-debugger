@@ -36,42 +36,13 @@ int LB_PORT = 5000;
 
 // These two must be the same as in Phase 1
 
-const int MAX_VARS_PER_FRAME = 16;
-const int MAX_STACK_DEPTH = 64;
-
 
 // ---- Structs (same as Phase 1, so the file can be read back exactly as it was written) ----
-struct Variable
-{
-    string name;
-    int32_t value;
-};
-struct Frame
-{
-    string func_name;
-    int32_t argc;
-    Variable argv[MAX_VARS_PER_FRAME];
-    int32_t returnLine;
-    Variable locals[MAX_VARS_PER_FRAME];
-    int32_t localCount;
-};
-struct Snapshot
-{
-    Frame callStack[MAX_STACK_DEPTH];
-    int32_t stackDepth;
-};
-struct TTDBHeader 
-{
-    char magic[4]; // "TTDB"
-    int32_t version;
-    int32_t stepCount;
-    int64_t indexOffset;
-};
 
 // ---- Structs only the client needs ----
 struct TdbgReader
 {
-    ssize_t file_index;
+    FILE * file=nullptr; ///changed the index her   ecuz iknow how to read with the file
     TTDBHeader header;
     vector<int64_t> index;
 };
@@ -124,15 +95,131 @@ bool receiveResponse(int sock, const char *outTdbgPath, string &outError)
 // The index lets us jump straight to any step without reading the steps before it.
 // =============================================================================================
 
+
 bool openTdbg(const char *path, TdbgReader &r)
 {
+    FILE * f=fopen(path,"rb");
+
+    if(!f){
+        return false;
+
+    }
+    TTDBHeader h;
+    if(fread(h.magic,1,4,f)!=4|| 
+       fread(&h.version,sizeof(int32_t),1,f)!=1||
+       fread(&h.stepCount,sizeof(int32_t),1,f)!=1||
+       fread(&h.indexOffset,sizeof(int64_t),1,f)!=1){
+        cout<<"FAIL 2: header read\n";
+        fclose(f);
+        return false;
+
+    }
+    fseek(f,0,SEEK_END);
+    int64_t file_s=ftell(f);
+
+    if(memcmp(h.magic,"TTDB",4)!=0 || h.version!=1 || h.stepCount<=0 ||
+       h.indexOffset<20 ||
+       h.indexOffset+(int64_t)h.stepCount*8 != file_s){
+        fclose(f);
+        return false;
+    }
+
+    r.index.resize(h.stepCount);
+    fseek(f,h.indexOffset,SEEK_SET);
+    if(fread(r.index.data(),sizeof(int64_t),h.stepCount,f)!=(size_t)h.stepCount){
+        fclose(f);
+        return false;
+    }
+    r.file=f;
+    r.header=h;
+    return true;
+
 }
 void closeTdbg(TdbgReader &r)
 {
-    // Free r.index and close the file.
+    if(r.file){
+        fclose(r.file);
+        r.file=nullptr;
+        r.index.clear();
+    }
+}
+bool read_str(FILE * f,string &output){
+    int32_t l;
+    if(fread(&l,sizeof(int32_t),1,f)!=1){
+        return false;
+    }
+    if(l<0|| l> 1024){
+        return false;
+    }
+    output.resize(l);
+    if(l>0 && fread(&output[0],1,l,f)!=(size_t)l){
+        return false;
+    }
+    return true;
+}
+
+bool read_var(FILE * f,Variable &var){
+    return read_str(f,var.name) && fread(&var.value,sizeof(int32_t),1,f)==1;
+}
+bool read_frame(FILE * f,Frame &fr){
+    if(!read_str(f,fr.func_name)){
+        return false;
+    }
+    if(fread(&fr.argc,sizeof(int32_t),1,f)!=1){
+        return false;
+    }
+    if(fr.argc<0 || fr.argc>MAX_VARS_PER_FRAME){
+        return false;
+    }
+    for(int i=0;i<fr.argc;i++){
+        if(!read_var(f,fr.argv[i])){
+            return false;
+        }
+    }
+
+    if(fread(&fr.returnLine,sizeof(int32_t),1,f)!=1){
+        return false;
+    }
+    if(fread(&fr.localCount,sizeof(int32_t),1,f)!=1){
+        return false;
+    }
+    if(fr.localCount<0 || fr.localCount>MAX_VARS_PER_FRAME){
+        return false;
+    }
+    for(int i=0;i<fr.localCount;i++){
+        if(!read_var(f,fr.locals[i])){
+            return false;
+        }
+    }
+
+    return true;
 }
 Snapshot *readSnapshotAt(TdbgReader &r, int32_t step)
 {
+    if(step<0 || step >=r.header.stepCount){
+        return nullptr;
+    }
+
+    FILE * f=r.file;
+    if(fseek(f,r.index[step],SEEK_SET)!=0){
+        return nullptr;
+    }
+
+    Snapshot* snap=new Snapshot;
+    if(fread(&snap->stackDepth,sizeof(int32_t),1,f)!=1|| snap->stackDepth<0 || snap->stackDepth> MAX_STACK_DEPTH){
+        delete snap;
+        return nullptr;
+    }
+
+    for(int i=0;i<snap->stackDepth;i++){
+        if(!read_frame(f,snap->callStack[i])){
+            delete snap;
+            return nullptr;
+        }
+    }
+    return snap;
+
+
 }
 
 // =============================================================================================
@@ -222,4 +309,25 @@ int main(int argc, char *argv[])
     // After the loop: closeSession(session) and return 0.
     // Never exit the loop because of an error. Only quit or the end of the input leaves it.
 
+        TdbgReader r;
+    if (!openTdbg("session.tdbg", r)) { cout << "damaged\n"; return 1; }
+
+    int32_t steps[2] = {1, 4};
+    for (int k = 0; k < 2; k++)
+    {
+        Snapshot *s = readSnapshotAt(r, steps[k]);
+        if (!s) { cout << "nullptr\n"; continue; }
+        cout << "step index " << steps[k] << ", depth " << s->stackDepth << endl;
+        for (int i = 0; i < s->stackDepth; i++)
+        {
+            Frame &f = s->callStack[i];
+            cout << "  " << f.func_name << ": ";
+            for (int a = 0; a < f.argc; a++) cout << f.argv[a].name << "=" << f.argv[a].value << " ";
+            for (int l = 0; l < f.localCount; l++) cout << f.locals[l].name << "=" << f.locals[l].value << " ";
+            cout << endl;
+        }
+        delete s;
+    }
+    cout << (readSnapshotAt(r, 99) == nullptr ? "step 99: nullptr (correct)" : "step 99: WRONG") << endl;
+    closeTdbg(r);
 }

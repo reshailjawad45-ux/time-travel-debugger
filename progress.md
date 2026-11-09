@@ -71,7 +71,13 @@
  - stage 4 compete
  - phase 01 of Project complete
 
+## Date 9th November 2026
 
+### what i implemented
+
+ - Part 2 of clent.cpp
+ - read the ttb file
+ 
 
 
 
