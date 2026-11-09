@@ -77,7 +77,7 @@
 
  - Part 2 of clent.cpp
  - read the ttb file
- 
+ - Part C,D,E,F all implemented
 
 
 

@@ -109,7 +109,6 @@ bool openTdbg(const char *path, TdbgReader &r)
        fread(&h.version,sizeof(int32_t),1,f)!=1||
        fread(&h.stepCount,sizeof(int32_t),1,f)!=1||
        fread(&h.indexOffset,sizeof(int64_t),1,f)!=1){
-        cout<<"FAIL 2: header read\n";
         fclose(f);
         return false;
 
@@ -229,10 +228,17 @@ Snapshot *readSnapshotAt(TdbgReader &r, int32_t step)
 
 void initSession(DebugSession &s)
 {
+    s.active_flag=0;
+    s.reader.file=nullptr;
+    s.currentStep=0;
    
 }
 void closeSession(DebugSession &s)
 {
+    if(s.active_flag){
+        closeTdbg(s.reader);
+    }
+    s.active_flag=0;
     // If active, call closeTdbg(s.reader). Then set active = false.
     // Called when the user types quit and when the input ends.
 }
@@ -247,12 +253,41 @@ bool showCurrent(DebugSession &s)
 {
     // Read the snapshot at s.currentStep, call printSnapshot, delete the snapshot.
     // If readSnapshotAt returns nullptr, print "damaged .tdbg file" and return false.
+    Snapshot* snap=readSnapshotAt(s.reader,(int32_t)s.currentStep);
+    if(snap==nullptr){
+        cout <<"damaged .tgbd file\n";
+        return false;
+    }
+    printSnapshot((int32_t)s.currentStep+1,s.reader.header.stepCount,*snap);
+    delete snap;
+    return true;
 }
 bool moveBy(DebugSession &s, int32_t delta)
 {
+    if(s.active_flag==0){
+        cout<<"No session active.\n";
+        return false;
+    }
+    int64_t tar=s.currentStep+delta;
+    int64_t end_step=s.reader.header.stepCount-1;
+
+    if(tar<0 || tar>end_step){
+        cout <<"You cannot move there,steps( 1 -"<<s.reader.header.stepCount<<" )  current Step:"<<s.currentStep+1<<endl;
+        return false;
+    }
+
+    int64_t curr=s.currentStep;
+    s.currentStep=tar;
+    if(!showCurrent(s)){
+        s.currentStep=curr;
+        return false;
+    }
+
+    return true;
 }
 bool cmdStart(DebugSession &s, const string &sourcePath)
 {
+
     // 1. requestDebugFile with host and port, saving to TDBG_FILE.
     // 2. If it fails, print the error text and return false. Keep the old session as it was.
     // 3. Open the new file with openTdbg into a NEW local TdbgReader.
@@ -260,11 +295,34 @@ bool cmdStart(DebugSession &s, const string &sourcePath)
     // 4. Only now close the old reader (if s.active), then put the new reader into s,
     //    set s.currentStep = 0 and s.active = true.
     // 5. Show step 1 with showCurrent(s).
+
+    TdbgReader new_r;
+    if(!openTdbg(sourcePath.c_str(),new_r)){
+        cout <<"ERROR: server sent a damaged .tgbd file.\n";
+        return false;
+    }
+
+    if(s.active_flag==1){
+        closeTdbg(s.reader);
+    }
+    s.reader=new_r;
+    s.currentStep=0;
+    s.active_flag=1;
+    return showCurrent(s);
+
 }
-bool cmdNext(DebugSession &s) {}
-bool cmdPrv(DebugSession &s) {}
-bool cmdJmpNext(DebugSession &s, int32_t n) {}
-bool cmdJmpPrv(DebugSession &s, int32_t n) { }
+bool cmdNext(DebugSession &s) {
+    return moveBy(s,1);
+}
+bool cmdPrv(DebugSession &s) {
+    return moveBy(s,-1);
+}
+bool cmdJmpNext(DebugSession &s, int32_t n) {
+    return moveBy(s,n);
+}
+bool cmdJmpPrv(DebugSession &s, int32_t n) { 
+    return moveBy(s,-n);
+}
 
 // =============================================================================================
 // PART E: PRINTING
@@ -272,9 +330,37 @@ bool cmdJmpPrv(DebugSession &s, int32_t n) { }
 
 void printSnapshot(int32_t step, int32_t totalSteps, const Snapshot &s)
 {
+    cout <<"Step: ["<<step<<":"<<totalSteps<<"]\n";
+    if(s.stackDepth==0){
+        cout <<"Programe Ends!\n";
+        return;
+    }
+    for(int i=0;i<s.stackDepth;i++){
+        const Frame &curr=s.callStack[i];
+        cout <<" "<<curr.func_name<<" : ";
+        for(int j=0;j<curr.argc;j++){
+            cout <<" "<<curr.argv[j].name <<"="<<curr.argv[j].value;
+
+        }
+        
+        for(int j=0;j<curr.localCount;j++){
+            cout <<" "<<curr.locals[j].name <<"="<<curr.locals[j].value;
+
+        }
+        cout <<endl;
+    }
 }
 void printHelp()
 {
+    cout <<"Commands:\n";
+    cout <<" - start <file>\n";
+    cout <<" - next\n";
+    cout <<" - prv\n";
+    cout <<" - jmp next <n>\n";
+    cout <<" - jmp prv <n>\n";
+    cout <<" - help\n";
+    cout <<" - quit || exit\n";
+
     // Print the commands
 }
 
@@ -282,6 +368,22 @@ void printHelp()
 // PART F: THE INFINITE LOOP
 // =============================================================================================
 
+bool check_postive_num(const string &word,int32_t & num){
+    if(word.empty()){
+        return false;
+    }
+    for(int i=0;i<word.size();i++){
+        if(word[i]<'0' || word[i]>'9'){
+            return false;
+        }
+    }
+    int32_t n=stoi(word);;
+    if(n<1 || n> MAX_JUMP){
+        return false;
+    }
+    num=n;
+    return true;
+}
 bool runCommand(DebugSession &s, const string &line, bool &quitRequested)
 {
     // 1. Split the line into words.
@@ -295,6 +397,65 @@ bool runCommand(DebugSession &s, const string &line, bool &quitRequested)
     //      help       -> printHelp
     //      quit, exit -> set quitRequested = true
     // 4. For anything else, or a wrong number of words, print "unknown command" and the help text, and return false.
+
+    vector<string> words;
+    string word="";
+    for(size_t i=0;i<line.size();i++){
+        if(line[i]==' ' || line[i]=='\t'){
+            if(word!=""){
+                words.push_back(word);
+                word="";
+            }
+        }else{
+            word=word+line[i];
+        }
+    }
+    if(word!=""){
+        words.push_back(word);
+    }
+
+    if(words.size()!=0 && words[0]==PROGRAM_NAME){
+        words.erase(words.begin());
+    }
+    if(words.empty()){
+        return true;
+    }
+    if(words.size()==2 && words[0]=="start"){
+        return cmdStart(s,words[1]);
+    }
+    if(words.size()==1 && words[0]=="next"){
+        return cmdNext(s);
+    }
+    if(words.size()==1 && words[0]=="prv"){
+        return cmdPrv(s);
+    }
+    if(words.size()==3 && words[0]=="jmp" && words[1]=="next"){
+        int32_t n;
+        if(check_postive_num(words[2],n)){
+            return cmdJmpNext(s,n);
+        }
+        
+    }
+    if(words.size()==3 && words[0]=="jmp" && words[1]=="prv"){
+        int32_t n;
+        if(check_postive_num(words[2],n)){
+            return cmdJmpPrv(s,n);
+        }
+        
+    }
+    if(words.size()==1 &&words[0]=="help"){
+        printHelp();
+        return true;
+    }
+    if(words.size()==1 &&(words[0]=="quit" || words[0]=="exit")){
+        quitRequested=true;
+        return true;
+    }
+    cout <<"Unknown Command!\n";
+    printHelp();
+    return false;
+
+
 }
 int main(int argc, char *argv[])
 {
@@ -308,26 +469,27 @@ int main(int argc, char *argv[])
     //
     // After the loop: closeSession(session) and return 0.
     // Never exit the loop because of an error. Only quit or the end of the input leaves it.
-
-        TdbgReader r;
-    if (!openTdbg("session.tdbg", r)) { cout << "damaged\n"; return 1; }
-
-    int32_t steps[2] = {1, 4};
-    for (int k = 0; k < 2; k++)
-    {
-        Snapshot *s = readSnapshotAt(r, steps[k]);
-        if (!s) { cout << "nullptr\n"; continue; }
-        cout << "step index " << steps[k] << ", depth " << s->stackDepth << endl;
-        for (int i = 0; i < s->stackDepth; i++)
-        {
-            Frame &f = s->callStack[i];
-            cout << "  " << f.func_name << ": ";
-            for (int a = 0; a < f.argc; a++) cout << f.argv[a].name << "=" << f.argv[a].value << " ";
-            for (int l = 0; l < f.localCount; l++) cout << f.locals[l].name << "=" << f.locals[l].value << " ";
-            cout << endl;
-        }
-        delete s;
+    if(argc==3){
+        LB_HOST=argv[1];
+        LB_PORT=atoi(argv[2]);
     }
-    cout << (readSnapshotAt(r, 99) == nullptr ? "step 99: nullptr (correct)" : "step 99: WRONG") << endl;
-    closeTdbg(r);
+
+    DebugSession s;
+    initSession(s);
+    cout <<"\n===TIME TRAVERLER DEBUGGER===\n";
+    printHelp();
+
+    bool quitRequested=false;
+    string line;
+    while(quitRequested==false){
+        cout <<PROMPT<<flush;
+        if(!getline(cin,line)){
+            break;
+
+        }
+        runCommand(s,line,quitRequested);
+    }
+    closeSession(s);
+    return  0;
+
 }
