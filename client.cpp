@@ -28,10 +28,9 @@ using namespace std;
 // ---- Constants ----
 const char *PROGRAM_NAME = "ttdb";
 const char *PROMPT = "ttdb> ";
-const int IO_BUFFER_SIZE = 64 * 1024;     // fixed buffer for streaming files to and from the socket
 const char *TDBG_FILE = "ttdb_last.tdbg"; // where the downloaded .tdbg is saved
 const int MAX_JUMP = 1000000000;          // biggest n accepted by jmp
-string LB_HOST = "127.0.0.0";
+string LB_HOST = "127.0.0.1";
 int LB_PORT = 5000;
 
 // These two must be the same as in Phase 1
@@ -57,21 +56,20 @@ struct DebugSession
 // PART A: TALKING TO THE LOAD BALANCER
 // =============================================================================================
 
-bool recvAll(int sock, char *buf, size_t n)
-{
-    // recv() can return fewer bytes than asked for, so keep calling it until exactly n bytes are read.
-    // Return false if the connection closes or fails before n bytes arrive.
-}
-bool sendAll(int sock, const char *buf, size_t n)
-{
-    // send() can send fewer bytes than asked for, so keep calling it until all n bytes are sent.
-    // Use the flag MSG_NOSIGNAL. Return false if the connection fails.
-}
+
+
 
 int connectToHost(const char *host, int port)
 {
     // Create a TCP socket and connect it to host:port.
     // Return the socket, or -1 if the connection fails.
+    int sock=socket(AF_INET,SOCK_STREAM,0);
+    if(sock <0){
+        return -1;
+    }
+    timerval timeout{30,0};
+
+    seyso
 }
 bool uploadSource(int sock, const char *sourcePath)
 {
@@ -255,7 +253,7 @@ bool showCurrent(DebugSession &s)
     // If readSnapshotAt returns nullptr, print "damaged .tdbg file" and return false.
     Snapshot* snap=readSnapshotAt(s.reader,(int32_t)s.currentStep);
     if(snap==nullptr){
-        cout <<"damaged .tgbd file\n";
+        cout <<"damaged .tdbg file\n";
         return false;
     }
     printSnapshot((int32_t)s.currentStep+1,s.reader.header.stepCount,*snap);
@@ -298,7 +296,7 @@ bool cmdStart(DebugSession &s, const string &sourcePath)
 
     TdbgReader new_r;
     if(!openTdbg(sourcePath.c_str(),new_r)){
-        cout <<"ERROR: server sent a damaged .tgbd file.\n";
+        cout <<"ERROR: server sent a damaged .tdbg file.\n";
         return false;
     }
 
