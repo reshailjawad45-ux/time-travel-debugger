@@ -182,25 +182,21 @@ void writeHeader(FILE *f, const TTDBHeader &h)
 // PASS 0x0: READING source.bin + VALIDITY CHECK
 bool readSourceLine(ifstream &in, string &out)
 {
-    string newline;
-    while(getline(in,newline)){
-        bool flag=true;
-        //used for checking if line is blank or not
-
-        for(int i=0;i<newline.length();i++){
-            if(newline[i]!=' ' && newline[i]!='\t'){
-                flag=false;
-                break;
-            }
+    sstring newline;
+    while(getline(in, newline)){
+        while(!newline.empty() &&
+              (newline.back()=='\r' || newline.back()==' ' || newline.back()=='\t')){
+            newline.pop_back();
         }
-        if(!flag){
-            out =newline;
-            return true;
+        size_t s = newline.find_first_not_of(" \t");
+        if(s == string::npos){
+            continue;            
         }
+        out = newline.substr(s);    
+        return true;
     }
-
     return false;
-    // reads the next nonblank line
+
 }
 string firstWord(const string &line)
 {
@@ -292,6 +288,7 @@ int64_t writeResolveRecord(FILE *f, int64_t offsetField, const string &text)
 }
 int64_t readResolveRecord(FILE *f, string &outText)
 {
+    
     int64_t offset;
     int32_t str_size;
 
