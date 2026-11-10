@@ -12,22 +12,25 @@
 #include <string>
 #include <cstdint>
 #include <fstream>
+#include <cstdio>
+#include <cstring>
+#include <cerrno>
+#include <stdexcept>
 #include <unistd.h>
 #include <sys/socket.h>
-#include <cstdint>
-#include <cstdio>
-#include<stdexcept>
+#include <sys/time.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include "helper.h"
 using namespace std;
 
 // ---- Constants ----
-const int32_t MAX_VARS_PER_FRAME = 16;
-const int32_t MAX_STACK_DEPTH = 64;
 const int32_t MAX_FUNCS = 128;
 const int32_t MAX_TOKENS = MAX_VARS_PER_FRAME + 2; // kW + func_name + upto 16 params/args
 const int32_t MAX_PATCHES = MAX_FUNCS * 4;
 const uint64_t MAX_SOURCE_BYTES = 15ULL * 1024 * 1024; // sanity cap on the declared file length
-const int32_t IO_BUFFER_SIZE = 64 * 1024;                  // fixed buffer for streaming to/from disk
-const int32_t SOCKET_TIMEOUT_SEC = 5;                      // TODO: apply as SO_RCVTIMEO so a deadclient can't hang the server forever
+const int32_t SOCKET_TIMEOUT_SEC = 5;                     
+ // TODO: apply as SO_RCVTIMEO so a deadclient can't hang the server forever
 
 // ---- Custom data structures
 
@@ -160,32 +163,7 @@ public:
 };
 
 // Core structs
-struct Variable
-{
-    string name;
-    int32_t value;
-};
-struct Frame
-{
-    string func_name;
-    int32_t argc;
-    Variable argv[MAX_VARS_PER_FRAME];
-    int32_t returnLine;
-    Variable locals[MAX_VARS_PER_FRAME];
-    int32_t localCount;
-};
-struct Snapshot
-{
-    Frame callStack[MAX_STACK_DEPTH];
-    int32_t stackDepth;
-};
-struct TTDBHeader
-{
-    char magic[4]; // "TTDB"
-    int32_t version;
-    int32_t stepCount;
-    int64_t indexOffset;
-};
+
 void writeHeader(FILE *f, const TTDBHeader &h)
 {
     fwrite(h.magic, 1, 4, f);
@@ -197,16 +175,7 @@ void writeHeader(FILE *f, const TTDBHeader &h)
 }
 
 // resolve.bin - bookkeeping
-struct FuncEntry
-{
-    string funcName;
-    int64_t byteOffsetInResolveBin; // where this function's FUNC header record sits
-};
-struct PendingPatch
-{
-    int64_t byteOffsetOfOffsetField; // where in resolve.bin to seek back and overwrite
-    string targetFuncName;
-};
+
 
 
 
@@ -904,27 +873,273 @@ void writeTdbg(Timeline &timeline, const char *tdbgPath)
     // after timeline add the index array i the file
     // update the header
 }
-// main section
-int32_t main()
-{
 
-    if (!validateProgram("source.bin"))
-    {
-        // send an error response instead of a .tdbg file
-        return 1;
+
+////PHASE2///////////////
+
+bool receiveSource(int sock, string &errorMessage)
+{
+    FILE *src_f = fopen("source.bin", "wb");
+
+    if (src_f == nullptr){
+        errorMessage = "Cannot create source.bin";
+        return false;
+    }
+
+    TrailerChecker checker;
+
+    char rec_buff[IO_BUFFER_SIZE];
+    char out_buff[IO_BUFFER_SIZE + 4];
+    bool status_rec = false;
+    bool success = true;
+    uint64_t totalBytes = 0;
+
+    while (true){
+        ssize_t bytes_rec = recv(sock, rec_buff,IO_BUFFER_SIZE, 0);
+        if (bytes_rec < 0 && errno == EINTR){
+            continue;
+        }
+
+        if (bytes_rec < 0){
+            errorMessage = "Error receiving source file";
+            success = false;
+            break;
+        }
+
+        if (bytes_rec == 0){
+            break;
+        }
+
+        size_t body_bytes = checker.feed( rec_buff, bytes_rec,out_buff);
+
+        if (body_bytes == 0){
+            continue;
+        }
+
+        size_t start = 0;
+        if (!status_rec){
+            status_rec = true;
+            if (out_buff[0] != 0){
+                errorMessage = "Invalid upload status";
+                success = false;
+                break;
+            }
+            start = 1;
+        }
+        size_t fileBytes = body_bytes - start;
+
+        if (fileBytes > MAX_SOURCE_BYTES - totalBytes){
+            errorMessage = "Source file is too large";
+            success = false;
+            break;
+        }
+        if (fwrite(out_buff + start, 1,fileBytes, src_f) != fileBytes){
+            errorMessage = "Error writing source.bin";
+            success = false;
+            break;
+        }
+
+        totalBytes += fileBytes;
+    }
+
+    if (fclose(src_f) != 0){
+        errorMessage = "Error saving source.bin";
+        success = false;
+    }
+    if (success && (!status_rec|| !checker.verify())){
+        errorMessage = "Upload checksum mismatch";
+        success = false;
+    }
+
+    if (success && totalBytes == 0){
+        errorMessage = "Source file is empty";
+        success = false;
+    }
+
+    if (!success){
+        remove("source.bin");
+    }
+
+    return success;
+}
+
+
+
+
+bool sendServerError(int sock, const string &errorMessage)
+{
+    CrcBuilder crc;
+    char status = 1;
+    crc.add(&status, 1);
+    crc.add(errorMessage.c_str(), errorMessage.size());
+
+    if(!sendAll(sock, &status, 1)){
+        return false;
+    }
+
+    if(!sendAll(sock, errorMessage.c_str(), errorMessage.size())){
+        return false;
+    }
+
+    return crc.sendTrailer(sock);
+}
+
+
+
+bool sendDebugFile(int sock, const char *tdbgPath)
+{
+    FILE *debug_f = fopen(tdbgPath, "rb");
+
+    if(debug_f == nullptr){
+        return false;
+    }
+
+    CrcBuilder crc;
+    char status = 0;
+
+    bool success = sendAll(sock, &status, 1);
+
+    if(success){
+        crc.add(&status, 1);
+    }
+
+    char send_buff[IO_BUFFER_SIZE];
+    size_t bytes_read;
+
+    while(success && (bytes_read = fread(send_buff, 1, IO_BUFFER_SIZE,debug_f)) > 0){
+        crc.add(send_buff, bytes_read);
+
+        if(!sendAll(sock, send_buff, bytes_read)){
+            success = false;
+            break;
+        }
+    }
+    if(ferror(debug_f)){
+        success = false;
+    }
+    if(fclose(debug_f) != 0){
+        success = false;
+    }
+    if(!success){
+        return false;
+    }
+
+    return crc.sendTrailer(sock);
+}
+
+
+
+bool handleClient(int sock)
+{
+    string errorMessage;
+    if(!receiveSource(sock, errorMessage)){
+        return sendServerError(sock, errorMessage);
+    }
+    if(!validateProgram("source.bin")){
+        return sendServerError(sock, "Invalid source program");
     }
 
     int64_t mainOffset = resolveProgram("source.bin", "resolve.bin");
 
-    if(mainOffset ==-1){
-        return 1;
+    if(mainOffset == -1){
+        return sendServerError(sock, "Error resolving source program");
     }
-    
 
     Timeline timeline;
     executeProgram("resolve.bin", mainOffset, timeline);
 
+    if(timeline.getStepCount() == 0){
+        return sendServerError(sock, "Program execution failed");
+    }
+    TimelineNode *curr = timeline.begin();
+
+    while(curr->next != nullptr){
+        curr = curr->next;
+    }
+
+    if(curr->data->stackDepth != 0){
+        return sendServerError(sock, "Program execution incomplete");
+    }
+
+    if(remove("session.tdbg") != 0 && errno != ENOENT){
+        return sendServerError(sock, "Cannot remove old debug file");
+    }
+
     writeTdbg(timeline, "session.tdbg");
 
-    return 0;
+    FILE *debug_f = fopen("session.tdbg", "rb");
+
+    if(debug_f == nullptr){
+        return sendServerError(sock, "Cannot create debug file");
+    }
+
+    fclose(debug_f);
+    return sendDebugFile(sock, "session.tdbg");
+}
+
+// main section
+int main(int argc, char *argv[])
+{
+    if(argc != 2){
+        cout << "Usage: ./server <port>" << endl;
+        return 1;
+    }
+
+    char *end = nullptr;
+    errno = 0;
+    long port_num = strtol(argv[1], &end, 10);
+
+    if(errno != 0 || end == argv[1] || *end != '\0' ||
+       port_num < 1 || port_num > 65535){
+        cout << "Invalid port number" << endl;
+        return 1;
+    }
+
+    int listenSock = createListenSocket((int)port_num);
+
+    if(listenSock < 0){
+        cout << "Cannot create listening socket" << endl;
+        return 1;
+    }
+
+    cout << "Server listening on port " << port_num << endl;
+
+    while(true){
+        int clientSock = accept(listenSock, nullptr, nullptr);
+
+        if(clientSock < 0){
+            if(errno == EINTR){
+                continue;
+            }
+            perror("accept");
+            break;
+        }
+
+        timeval timeout{};
+        timeout.tv_sec = SOCKET_TIMEOUT_SEC;
+
+        if(setsockopt(clientSock, SOL_SOCKET, SO_RCVTIMEO,&timeout, sizeof(timeout)) < 0 ||setsockopt(clientSock, SOL_SOCKET, SO_SNDTIMEO,&timeout, sizeof(timeout)) < 0){
+            perror("setsockopt");
+            close(clientSock);
+            continue;
+        }
+
+        try{
+            if(!handleClient(clientSock)){
+                cout << "Error handling client" << endl;
+            }
+        }
+        catch(const exception &e){
+            cout << "Server error: " << e.what() << endl;
+        }
+
+        close(clientSock);
+
+        remove("source.bin");
+        remove("resolve.bin");
+        remove("session.tdbg");
+    }
+
+    close(listenSock);
+    return 1;
 }

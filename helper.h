@@ -6,9 +6,14 @@
 #include<cstddef>
 #include <cerrno>
 #include <sys/socket.h>
+#include <unistd.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 using namespace std;
 
-
+const char STATUS_OK = 0;  
+const char STATUS_ERR = 1;
+const int LISTEN_BACKLOG = 16;   
 const int32_t MAX_VARS_PER_FRAME = 16;
 const int32_t MAX_STACK_DEPTH = 64;
 const int IO_BUFFER_SIZE = 64 * 1024;     // fixed buffer for streaming files to and from the socket
@@ -172,3 +177,35 @@ class TrailerChecker{
         return checksum^ 0xFFFFFFFFu;
     }
 };
+
+
+int createListenSocket(int port)
+{ 
+    // Create a TCP socket with SOCK_CLOEXEC(flag).
+    // set SO_REUSEADDR so we can restart the load balancer right away.
+    // bind() to the port on any address, then listen(LISTEN_BACKLOG).
+    // If bind or listen fails, print the error and exit, because without this socket we cannot work.
+    int sock = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
+    if(sock < 0){
+        perror("socket");
+        exit(1);
+    }
+    int reuseAddress = 1;
+    setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &reuseAddress, sizeof(reuseAddress));
+
+    sockaddr_in serverAddress{};
+    serverAddress.sin_family = AF_INET;
+    serverAddress.sin_addr.s_addr = htonl(INADDR_ANY);
+    serverAddress.sin_port = htons(port);
+
+    if(bind(sock, (sockaddr*)&serverAddress, sizeof(serverAddress)) < 0){
+        perror("bind");
+        exit(1);
+    }
+    if(listen(sock, LISTEN_BACKLOG) < 0){
+        perror("listen");
+        exit(1);
+    }
+    return sock;
+
+}

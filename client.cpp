@@ -512,11 +512,14 @@ bool check_postive_num(const string &word,int32_t & num){
             return false;
         }
     }
-    int32_t n=stoi(word);;
-    if(n<1 || n> MAX_JUMP){
+    if(word.size() > 10){ 
         return false;
     }
-    num=n;
+    long long n = stoll(word);
+    if(n < 1 || n > MAX_JUMP){
+        return  false;
+    }
+    num = (int32_t)n;
     return true;
 }
 bool runCommand(DebugSession &s, const string &line, bool &quitRequested)
@@ -592,6 +595,10 @@ bool runCommand(DebugSession &s, const string &line, bool &quitRequested)
 
 
 }
+
+
+
+
 int main(int argc, char *argv[])
 {
     // you get string LB_HOST and int LB_PORT = 0 in arguments of this main function. 

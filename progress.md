@@ -88,6 +88,9 @@
 
 ### what i implemented
  - completed partA of clent.cpp
+ - connect it with server.cpp
+ - add some function in server.cpp
+ - Successfully tested the queue-full condition using 12 simultaneous TCP connections.
  - 
 
 
