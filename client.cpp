@@ -23,6 +23,10 @@
 #include <vector>
 #include <sys/socket.h>
 #include "helper.h"
+#include<netinet/in.h>
+#include<arpa/inet.h>
+#include <sys/time.h>
+#include <cerrno>
 using namespace std;
 
 // ---- Constants ----
@@ -67,15 +71,49 @@ int connectToHost(const char *host, int port)
     if(sock <0){
         return -1;
     }
-    timerval timeout{30,0};
+    timeval timeout{30,0};
+    setsockopt(sock,SOL_SOCKET,SO_RCVTIMEO,&timeout,sizeof(timeout));
 
-    seyso
+    sockaddr_in serverAddress{};
+    serverAddress.sin_family=AF_INET;
+    serverAddress.sin_port=htons(port);
+    if((inet_pton(AF_INET,host,&serverAddress.sin_addr)!=1)|| connect(sock,(sockaddr *)&serverAddress,sizeof(serverAddress))<0){
+        close(sock);
+        return -1;
+    }
+    return sock;
+
 }
 bool uploadSource(int sock, const char *sourcePath)
 {
     // have to do checksum and then send
     // When the file is finished, call shutdown(sock, SHUT_WR). This is how the server knows the string is complete.
     // Return false if the file cannot be opened or any send fails.
+    FILE *src_f=fopen(sourcePath,"rb");
+    if(!src_f){
+        return false;
+    }
+
+    CrcBuilder checksumbuilder;
+    char status=STATUS_OK;
+    bool success=sendAll(sock,&status,1);
+    checksumbuilder.add(&status,1);
+    static char buffer[IO_BUFFER_SIZE];
+    size_t bytesread;
+
+    while(success && (bytesread=fread(buffer,1,IO_BUFFER_SIZE,src_f))>0){
+        checksumbuilder.add(buffer,bytesread);
+        success=sendAll(sock,buffer,bytesread);
+    }
+    fclose(src_f);
+    if(!success){
+        return false;
+    }
+    if(!checksumbuilder.sendTrailer(sock)){
+        return false;
+    }
+    shutdown(sock,SHUT_WR);
+    return true;
 }
 bool receiveResponse(int sock, const char *outTdbgPath, string &outError)
 {
@@ -84,6 +122,96 @@ bool receiveResponse(int sock, const char *outTdbgPath, string &outError)
     // Status 1: collect the payload into outError. Status 0: write the payload to the file.
     // At the end call verify(). If it fails, delete the file, set outError to
     // "checksum mismatch, response corrupted" and return false.
+
+    TrailerChecker tc;
+    static char rec_buff[IO_BUFFER_SIZE];
+    static char out_buff[IO_BUFFER_SIZE+4];
+
+    FILE * fout=nullptr;
+    int status=-1;
+    bool rec_failed=false;
+    string err_msg;
+
+    while(true){
+        ssize_t bytes_rec =recv(sock,rec_buff,IO_BUFFER_SIZE,0);
+        if(bytes_rec<0 && errno ==EINTR){
+            continue;
+        }
+        if(bytes_rec<0){
+            rec_failed=true;
+            break;
+        }
+        if(bytes_rec==0){
+            break;
+        }
+
+        size_t body_bytes=tc.feed(rec_buff,bytes_rec,out_buff);
+
+        size_t dataoffset=0;
+        if(body_bytes>0 && status==-1){
+            status =(unsigned char)out_buff[0];
+            dataoffset=1;
+            if(status==0){
+                fout=fopen(outTdbgPath,"wb");
+                if(!fout){
+                    outError="cannot create file\n";
+                    return false;
+                }
+            }
+        }
+        if(body_bytes>dataoffset){
+            if(status==0){
+                fwrite(out_buff+dataoffset,1,body_bytes-dataoffset,fout);
+            }else{
+                err_msg.append(out_buff+dataoffset,body_bytes-dataoffset);
+            }
+        }
+
+    }
+    if(fout){
+        fclose(fout);
+
+    }
+    if(rec_failed || status==-1){
+        remove(outTdbgPath);
+        outError="no valid reply from server";
+        return false;
+    }
+
+    if(!tc.verify() || (status !=0 && status !=1)){
+        remove(outTdbgPath);
+        outError="checksum mismatch,response corrupted";
+        return false;
+    }
+    if(status==1){
+        outError=err_msg;
+        return false;
+    }
+
+    return true;
+}
+
+bool requestDebugFile(const char * h,int port_no,const char * src,const char * out_p,string & err){
+    FILE * src_f=fopen(src,"rb");
+    if(!src_f){
+        err=string("cannot open\n")+src;
+        return false;
+    }
+    fclose(src_f);
+    int sock=connectToHost(h,port_no);
+    if(sock<0 ){
+        err="cannot connect to load balancer";
+        return false;
+    }
+    if(!uploadSource(sock,src)){
+        close(sock);
+        err="upload failed";
+        return false;
+    }
+
+    bool success=receiveResponse(sock,out_p,err);
+    close(sock);
+    return success;
 }
 
 // =============================================================================================
@@ -294,15 +422,24 @@ bool cmdStart(DebugSession &s, const string &sourcePath)
     //    set s.currentStep = 0 and s.active = true.
     // 5. Show step 1 with showCurrent(s).
 
+    string tmp=string(TDBG_FILE)+".tmp";
+    string err;
+    if(!requestDebugFile(LB_HOST.c_str(),LB_PORT,sourcePath.c_str(),tmp.c_str(),err)){
+        cout <<"ERROR: "<<err<<endl;
+        return false;
+
+    }
     TdbgReader new_r;
-    if(!openTdbg(sourcePath.c_str(),new_r)){
-        cout <<"ERROR: server sent a damaged .tdbg file.\n";
+    if(!openTdbg(tmp.c_str(),new_r)){
+        remove(tmp.c_str());
+        cout <<"ERROR: server sent a damaged .tdbg file\n";
         return false;
     }
 
     if(s.active_flag==1){
         closeTdbg(s.reader);
     }
+    rename(tmp.c_str(),TDBG_FILE);
     s.reader=new_r;
     s.currentStep=0;
     s.active_flag=1;

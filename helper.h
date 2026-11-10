@@ -2,6 +2,10 @@
 #include <iostream>
 #include <string>
 #include <cstdint>
+#include<cstring>
+#include<cstddef>
+#include <cerrno>
+#include <sys/socket.h>
 using namespace std;
 
 
@@ -54,7 +58,7 @@ inline bool recvAll(int sock, char *buf, size_t n)
     // Return false if the connection closes or fails before n bytes arrive.
     size_t bytes_rec=0;
     while(bytes_rec<n){
-        ssize_t res=recv(sock,buff+bytes_rec,n-bytes_rec,0);
+        ssize_t res=recv(sock,buf+bytes_rec,n-bytes_rec,0);
         if(res<0 && errno ==EINTR){
             continue;
         }
@@ -71,7 +75,7 @@ inline bool sendAll(int sock, const char *buf, size_t n)
     // Use the flag MSG_NOSIGNAL. Return false if the connection fails.
     size_t bytes_sent=0;
     while(bytes_sent< n){
-        ssize_t res=send(sock,buff+bytes_sent,n-bytes_sent,MSG_NOSIGNAL);
+        ssize_t res=send(sock,buf+bytes_sent,n-bytes_sent,MSG_NOSIGNAL);
         if(res<0 && errno==EINTR){
             continue;
         }
@@ -81,12 +85,12 @@ inline bool sendAll(int sock, const char *buf, size_t n)
         bytes_sent+=res;
 
     }
-    return false;
+    return true;
 }
 
 inline uint32_t crc32_update(uint32_t checksum,const unsigned char * p,size_t n){
     for(size_t i=0;i<n;i++){
-        checksum ^=data[i];
+        checksum ^=p[i];
 
         for(int j=0;j<8;j++){
             if(checksum & 1){
@@ -111,11 +115,11 @@ inline void putTrailer(char trailer[4],uint32_t checksum){
 
 inline uint32_t getTrailer(const char trailer[4]){
     return ((uint32_t)(unsigned char)trailer[0] <<24) | ((uint32_t)(unsigned char)trailer[1] <<16 )| 
-    ((uint32_t)(unsigned char)trailer[2] <<8) | ((uint32_t)(unsigned char)trailer[4] <<24);
+    ((uint32_t)(unsigned char)trailer[2] <<8) | ((uint32_t)(unsigned char)trailer[3]);
 }
 
 class CrcBuilder{
-    uint32_t checksum 0xFFFFFFFFu;;
+    uint32_t checksum= 0xFFFFFFFFu;
 
     public:
     void add(const char * data,size_t n){
@@ -131,26 +135,26 @@ class CrcBuilder{
         putTrailer(trailer,finish());
         return sendAll(sock,trailer,4);
     }
-}
+};
 
 class TrailerChecker{
     char lastFourBytes[4];
     size_t bytes_held=0;
-    uint32_t checksum== 0xFFFFFFFFu;
+    uint32_t checksum= 0xFFFFFFFFu;
 
     public:
     size_t feed(const char* rec_data,size_t rec_s,char* output){
         size_t n=bytes_held + rec_s;
         if(n<=4){
-            memcmp(lastFourBytes+bytes_held,rec_data,rec_s);
+            memcpy(lastFourBytes+bytes_held,rec_data,rec_s);
             bytes_held=n;
             return 0;
         }
-        memcmp(output,lastFourBytes,bytes_held);
-        memcmp(output+bytes_held,rec_data,rec_s);
+        memcpy(output,lastFourBytes,bytes_held);
+        memcpy(output+bytes_held,rec_data,rec_s);
         size_t body_bytes=n-4;
-        checksum=crc32_update(checksum,(cons unsigned char*)output,body_bytes);
-        memcmp(lastFourBytes,output+body_bytes,4);
+        checksum=crc32_update(checksum,(const unsigned char*)output,body_bytes);
+        memcpy(lastFourBytes,output+body_bytes,4);
         bytes_held=4;
         return body_bytes;
 
@@ -167,4 +171,4 @@ class TrailerChecker{
     uint32_t compute_crc(){
         return checksum^ 0xFFFFFFFFu;
     }
-}
+};

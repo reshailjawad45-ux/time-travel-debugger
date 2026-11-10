@@ -78,6 +78,18 @@
  - Part 2 of clent.cpp
  - read the ttb file
  - Part C,D,E,F all implemented
+ - added shared constants and data structures in helping.h
+ - implemented sendAll() and recvAll() for transmission in helping.h
+ - implemented crc32_update() to calculate checksums in helping.h
+ - added putTrailere()  and getTrailer() to convert checksum in helping.h
+ - implemented trailerChecher and CrcBuilder to calculate checksum in helping.h
+
+## Date 10th November 2026
+
+### what i implemented
+ - completed partA of clent.cpp
+ - 
+
 
 
 
